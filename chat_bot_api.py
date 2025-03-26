@@ -16,7 +16,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END
 
-# Define simple API models
 class Message(BaseModel):
     role: str
     content: str
@@ -37,23 +36,18 @@ class SummaryResponse(BaseModel):
     issue: str
     confidence: str
 
-# Environment setup
 os.environ["GROQ_API_KEY"] = "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"
 GROQ_MODEL = "llama3-70b-8192"
 
-# Simple in-memory session storage
 sessions = {}
 
-# Create a directory for uploaded PDFs
 PDF_DIR = "uploaded_pdfs"
 os.makedirs(PDF_DIR, exist_ok=True)
 
-# Initialize FastAPI app
 app = FastAPI(title="Healthcare Chatbot API", 
               description="API for healthcare conversations with PDF support",
               version="1.0.0")
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,13 +56,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize session
 def get_session(session_id=None):
     if not session_id:
         session_id = str(uuid.uuid4())
     
     if session_id not in sessions:
-        # Create vector store for PDF
         dimension = 100
         index = faiss.IndexFlatL2(dimension)
         
@@ -85,7 +77,6 @@ def get_session(session_id=None):
     
     return sessions[session_id], session_id
 
-# Simple text to vector function
 def text_to_vector(text, dimension=100):
     hash_object = hashlib.md5(text.encode())
     hash_hex = hash_object.hexdigest()
@@ -96,19 +87,14 @@ def text_to_vector(text, dimension=100):
     
     return vector
 
-# Process PDF function
 def process_pdf(file_path, session):
     try:
-        # Load PDF
         loader = PyPDFLoader(file_path)
         docs = loader.load()
         
-        # Process pages
         for i, doc in enumerate(docs):
-            # Create embedding
             embedding = text_to_vector(doc.page_content)
             
-            # Add to FAISS index
             session["pdf_store"]["index"].add(np.array([embedding]))
             session["pdf_store"]["documents"].append(doc)
             session["pdf_store"]["metadata"].append({
@@ -122,7 +108,6 @@ def process_pdf(file_path, session):
         print(f"Error processing PDF: {e}")
         return 0
 
-# Search PDF
 def search_pdf(query, session, top_k=3):
     if not session["has_pdf"]:
         return "No PDF has been uploaded yet."
@@ -140,13 +125,10 @@ def search_pdf(query, session, top_k=3):
     
     return "\n\n".join(results)
 
-# Generate diagnostic summary
 def generate_assessment(messages):
-    # Extract user messages
     user_inputs = [msg["content"] for msg in messages if msg["role"] == "user"]
     all_content = "\n".join(user_inputs)
     
-    # Generate assessment
     llm = ChatGroq(model=GROQ_MODEL)
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a healthcare assistant providing a potential diagnostic assessment.
@@ -170,7 +152,6 @@ def generate_assessment(messages):
     chain = prompt | llm | StrOutputParser()
     assessment = chain.invoke({"conversation": all_content})
     
-    # Extract condition
     condition = "Medical condition"
     for line in assessment.split("\n"):
         if line.strip() and not line.startswith("**") and not line.startswith("#") and not line.startswith("-"):
@@ -179,7 +160,6 @@ def generate_assessment(messages):
     
     return assessment, condition
 
-# Create LLM chain
 def create_chat_chain(system_message, pdf_context=None):
     if pdf_context:
         system_message = f"{system_message}\n\nUse the following PDF context:\n{pdf_context}"
@@ -194,7 +174,6 @@ def create_chat_chain(system_message, pdf_context=None):
     chain = prompt | llm | StrOutputParser()
     return chain
 
-# API routes
 @app.get("/")
 async def root():
     return {"message": "Healthcare Chatbot API is running"}
@@ -203,36 +182,29 @@ async def root():
 async def chat(request: ChatRequest):
     session, session_id = get_session(request.session_id)
     
-    # Add user message
     session["messages"].append({"role": "user", "content": request.message})
     
-    # Check if PDF is available
     if session["has_pdf"] and any(kw in request.message.lower() for kw in ["pdf", "document", "file", "read", "what does it say"]):
-        # Search PDF for relevant content
         pdf_context = search_pdf(request.message, session)
         system_message = "You are a helpful healthcare assistant analyzing a medical document."
         chain = create_chat_chain(system_message, pdf_context)
     else:
-        # Regular healthcare conversation
         system_message = "You are a helpful healthcare assistant. Provide clear medical information but always advise consulting a doctor for specific concerns."
         chain = create_chat_chain(system_message)
     
-    # Format messages for langchain
     chat_history = []
-    for msg in session["messages"][:-1]:  # Exclude the last message which we'll pass separately
+    for msg in session["messages"][:-1]:
         if msg["role"] == "user":
             chat_history.append(HumanMessage(content=msg["content"]))
         else:
             chat_history.append(AIMessage(content=msg["content"]))
     
-    # Get response
     try:
         response = chain.invoke({
             "chat_history": chat_history,
             "message": request.message
         })
         
-        # Add AI response to history
         session["messages"].append({"role": "assistant", "content": response})
         
         return {"message": response, "session_id": session_id}
@@ -244,18 +216,14 @@ async def upload_pdf(file: UploadFile = File(...), session_id: Optional[str] = F
     session, session_id = get_session(session_id)
     
     try:
-        # Save file temporarily
         file_path = os.path.join(PDF_DIR, f"{session_id}_{file.filename}")
         with open(file_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
         
-        # Process PDF
         page_count = process_pdf(file_path, session)
         
-        # Create welcome message
         welcome_message = f"📄 I've processed your PDF: {file.filename} ({page_count} pages). You can now ask me questions about this document!"
         
-        # Add system message about PDF
         session["messages"].append({"role": "assistant", "content": welcome_message})
         
         return {
@@ -274,10 +242,8 @@ async def get_assessment(session_id: str):
         return HTTPException(status_code=400, detail="Not enough conversation history for assessment")
     
     try:
-        # Generate assessment
         assessment, condition = generate_assessment(session["messages"])
         
-        # Create assessment message
         assessment_message = (
             "# 🏥 YOUR FINAL ASSESSMENT\n\n"
             f"{assessment}\n\n"
@@ -287,7 +253,6 @@ async def get_assessment(session_id: str):
             "2. Paste the condition in the search box to find a specialist"
         )
         
-        # Add to conversation
         session["messages"].append({"role": "assistant", "content": assessment_message})
         
         return {
@@ -307,7 +272,6 @@ async def get_history(session_id: str):
 async def reset_session(session_id: str):
     session, _ = get_session(session_id)
     
-    # Keep PDF store but reset messages
     pdf_store = session["pdf_store"]
     has_pdf = session["has_pdf"]
     
@@ -317,21 +281,17 @@ async def reset_session(session_id: str):
     
     return {"message": "Session reset successfully"}
 
-
 @app.post("/summary/{session_id}", response_model=SummaryResponse)
 async def get_summary(session_id: str):
-    """Generate a one-line summary of the medical issue identified in the conversation"""
     session, _ = get_session(session_id)
     
     if len(session["messages"]) < 2:
         return HTTPException(status_code=400, detail="Not enough conversation history for summary")
     
     try:
-        # Extract user messages
         user_inputs = [msg["content"] for msg in session["messages"] if msg["role"] == "user"]
         all_content = "\n".join(user_inputs)
         
-        # Generate a one-line summary with confidence level
         llm = ChatGroq(model=GROQ_MODEL)
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a healthcare assistant. 
@@ -349,7 +309,6 @@ async def get_summary(session_id: str):
         chain = prompt | llm | StrOutputParser()
         result = chain.invoke({"conversation": all_content})
         
-        # Parse the result to extract just the issue and confidence
         import json
         try:
             parsed = json.loads(result)
@@ -357,14 +316,11 @@ async def get_summary(session_id: str):
             confidence = parsed.get("confidence", "low")
         except Exception as json_error:
             print(f"JSON parsing error: {json_error}, Response was: {result}")
-            # Fallback if JSON parsing fails
             issue = "Unable to determine specific medical issue"
             confidence = "low"
         
-        # Return properly formatted response
         return SummaryResponse(issue=issue, confidence=confidence)
     except Exception as e:
-        # Return proper error response instead of raising an exception
         return SummaryResponse(
             issue="Error analyzing conversation", 
             confidence="low"
